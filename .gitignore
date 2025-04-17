@@ -1,14 +1,14 @@
-     # Ignore environment files
-     .env
-     .env.*
+# Ignore environment files
+.env
+.env.*
 
-     # Ignore Python virtual environments
-     venv/
-     env/
+# Ignore Python virtual environments
+venv/
+env/
 
-     # Ignore node_modules
-     node_modules/
+# Ignore node_modules
+node_modules/
 
-     # Ignore compiled files
-     __pycache__/
-     *.pyc
+# Ignore compiled files
+__pycache__/
+*.pyc
