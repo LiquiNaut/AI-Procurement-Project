@@ -1,0 +1,80 @@
+<div class="auth-container">
+  <mat-card class="auth-card">
+    <mat-card-header>
+      <mat-card-title>{{ isLogin ? "Login" : "Register" }}</mat-card-title>
+    </mat-card-header>
+    <mat-card-content>
+      <form [formGroup]="authForm" (ngSubmit)="onSubmit()">
+        <mat-form-field appearance="outline">
+          <mat-label>Email</mat-label>
+          <input
+            matInput
+            formControlName="email"
+            type="email"
+            placeholder="Enter your email"
+          />
+          <mat-error *ngIf="authForm.get('email')?.hasError('required')"
+            >Email is required</mat-error
+          >
+          <mat-error *ngIf="authForm.get('email')?.hasError('email')"
+            >Please enter a valid email</mat-error
+          >
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Password</mat-label>
+          <input
+            matInput
+            formControlName="password"
+            type="password"
+            placeholder="Enter your password"
+          />
+          <mat-error *ngIf="authForm.get('password')?.hasError('required')"
+            >Password is required</mat-error
+          >
+          <mat-error *ngIf="authForm.get('password')?.hasError('minlength')"
+            >Password must be at least 6 characters</mat-error
+          >
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" *ngIf="!isLogin">
+          <mat-label>Phone</mat-label>
+          <input
+            matInput
+            formControlName="phone"
+            type="tel"
+            placeholder="Enter your phone number"
+          />
+          <mat-error *ngIf="authForm.get('phone')?.hasError('required')"
+            >Phone is required</mat-error
+          >
+          <mat-error *ngIf="authForm.get('phone')?.hasError('pattern')"
+            >Please enter a valid phone number</mat-error
+          >
+        </mat-form-field>
+
+        <div class="error-message" *ngIf="error">
+          {{ error }}
+        </div>
+
+        <div class="button-container">
+          <button
+            mat-raised-button
+            color="primary"
+            type="submit"
+            [disabled]="!authForm.valid"
+          >
+            {{ isLogin ? "Login" : "Register" }}
+          </button>
+          <button mat-button type="button" (click)="toggleMode()">
+            {{
+              isLogin
+                ? "Need an account? Register"
+                : "Already have an account? Login"
+            }}
+          </button>
+        </div>
+      </form>
+    </mat-card-content>
+  </mat-card>
+</div>

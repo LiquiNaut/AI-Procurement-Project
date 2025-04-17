@@ -1,0 +1,101 @@
+<div class="chat-container">
+  <mat-card class="chat-card">
+    <mat-card-header>
+      <mat-card-title>AI Procurement Assistant</mat-card-title>
+      <div class="header-actions">
+        <div *ngIf="usingCachedData" class="cached-data-badge">
+          <mat-icon>cloud_off</mat-icon>
+          Using Cached Data
+        </div>
+        <button mat-button color="primary" (click)="startNewConversation()">
+          <mat-icon>add</mat-icon> New Conversation
+        </button>
+      </div>
+    </mat-card-header>
+    <div class="chat-content">
+      <div class="messages-container">
+        <div class="messages" #chatContainer>
+          <div
+            *ngFor="let message of messages"
+            class="message"
+            [class.user-message]="message.role === 'user'"
+            [class.ai-message]="message.role === 'assistant'"
+            [class.system-message]="message.role === 'system'"
+          >
+            <div class="message-content">
+              {{ message.content }}
+            </div>
+            <div class="message-timestamp">
+              {{ message.timestamp | date : "short" }}
+            </div>
+          </div>
+
+          <!-- Loading indicator -->
+          <div *ngIf="loading" class="message ai-message">
+            <div class="message-content">
+              <mat-spinner diameter="20"></mat-spinner>
+            </div>
+          </div>
+        </div>
+
+        <!-- Product Specification Card -->
+        <mat-card *ngIf="productSpecification" class="specification-card">
+          <mat-card-header>
+            <mat-card-title>Product Specification</mat-card-title>
+            <button mat-icon-button (click)="closeSpecification()">
+              <mat-icon>close</mat-icon>
+            </button>
+          </mat-card-header>
+          <mat-card-content>
+            <div class="specification-content">
+              <h3>{{ productSpecification.name }}</h3>
+              <p>{{ productSpecification.description }}</p>
+              <h4>Features:</h4>
+              <ul>
+                <li *ngFor="let feature of productSpecification.features">
+                  {{ feature }}
+                </li>
+              </ul>
+              <p>
+                <strong>Estimated Price:</strong>
+                {{ productSpecification.estimatedPrice }}
+              </p>
+              <p>
+                <strong>Category:</strong> {{ productSpecification.category }}
+              </p>
+            </div>
+            <button
+              mat-raised-button
+              color="primary"
+              (click)="downloadSpecification()"
+            >
+              <mat-icon>download</mat-icon>
+              Download Specification
+            </button>
+          </mat-card-content>
+        </mat-card>
+      </div>
+    </div>
+  </mat-card>
+
+  <div class="input-container">
+    <mat-form-field appearance="outline" class="message-input">
+      <mat-label>Type your message</mat-label>
+      <textarea
+        matInput
+        [(ngModel)]="newMessage"
+        (keydown)="onKeyPress($event)"
+        placeholder="Type your message here..."
+        rows="3"
+      ></textarea>
+    </mat-form-field>
+    <button
+      mat-raised-button
+      color="primary"
+      (click)="sendMessage()"
+      [disabled]="!newMessage.trim() || loading"
+    >
+      <mat-icon>send</mat-icon>
+    </button>
+  </div>
+</div>
