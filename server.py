@@ -1,20 +1,24 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from ai_agent_service import ProcurementAgent
+# Import both agents
+from custom_agents import Agent as ProcurementAgentImpl, Runner  # Renamed to avoid conflict
+from ai_agent_service import ProcurementAgent # This wraps the implementation
+from shopping_agent import ShoppingAgent
 import uvicorn
 import asyncio
 import nest_asyncio
 from typing import Optional, List, Dict, Any
 import uuid
 from datetime import datetime
-import json
 
 # Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
 
 app = FastAPI()
-agent = ProcurementAgent()
+# Instantiate both agents
+procurement_agent_service = ProcurementAgent() # Keep using the service wrapper
+shopping_agent = ShoppingAgent()
 
 # In-memory conversations store (use a database in production)
 conversations = {}
@@ -43,7 +47,7 @@ async def chat(message: Message):
         print(f"Conversation ID: {conversation_id}")
         print(f"Cached messages count: {len(message.cached_messages) if message.cached_messages else 0}")
         
-        # Always convert cached messages if available
+        # Convert cached messages if available
         converted_messages = None
         if message.cached_messages and len(message.cached_messages) > 0:
             # Convert the messages to the format expected by the agent
@@ -59,7 +63,7 @@ async def chat(message: Message):
             if not any(msg["role"] == "system" for msg in converted_messages):
                 converted_messages.insert(0, {
                     "role": "system",
-                    "content": agent.agent.instructions
+                    "content": procurement_agent_service.agent.instructions # Use instructions from the service's agent
                 })
             
             print(f"Converted {len(converted_messages)} messages from cache")
@@ -69,72 +73,86 @@ async def chat(message: Message):
             conversation_id = str(uuid.uuid4())
             print(f"Creating new conversation with ID: {conversation_id}")
             
-            if converted_messages:
-                # Use converted messages from above
-                conversations[conversation_id] = {
-                    'messages': message.cached_messages.copy() if message.cached_messages else [],
-                    'chat_history': converted_messages,
-                    'created_at': datetime.now().isoformat(),
-                    'restored_from_cache': True
+            initial_chat_history = converted_messages if converted_messages else [
+                {
+                    "role": "system",
+                    "content": procurement_agent_service.agent.instructions
                 }
-                print(f"Initialized from {len(converted_messages)} cached messages")
-            else:
-                # Start a fresh conversation
-                conversations[conversation_id] = {
-                    'messages': [],
-                    'chat_history': [
-                        {
-                            "role": "system",
-                            "content": agent.agent.instructions
-                        }
-                    ],
-                    'created_at': datetime.now().isoformat()
-                }
-                print("Initialized fresh conversation")
+            ]
+            
+            conversations[conversation_id] = {
+                'messages': message.cached_messages.copy() if message.cached_messages else [],
+                'chat_history': initial_chat_history,
+                'created_at': datetime.now().isoformat(),
+                'restored_from_cache': bool(converted_messages)
+            }
+            print(f"Initialized conversation ({'cached' if converted_messages else 'fresh'}) with {len(initial_chat_history)} history messages")
+            
         # For existing conversations, update the chat_history if we have cached messages
         elif converted_messages:
-            print(f"Updating existing conversation {conversation_id} with cached messages")
+            print(f"Updating existing conversation {conversation_id} with {len(converted_messages)} cached messages")
             conversations[conversation_id]['chat_history'] = converted_messages
         
-        print(f"Chat history length before processing: {len(conversations[conversation_id]['chat_history'])}")
+        current_chat_history = conversations[conversation_id]['chat_history']
+        print(f"Chat history length before processing: {len(current_chat_history)}")
         
-        # Process the message with chat history
-        result = agent.process_message(
-            message.message, 
-            conversations[conversation_id]['chat_history']
+        # === Step 1: Process message with Procurement Agent ===
+        procurement_result = procurement_agent_service.process_message(
+            message.message,
+            current_chat_history
         )
         
-        # Update the conversation history
-        conversations[conversation_id]['chat_history'] = result['history']
+        # Update the conversation history with the procurement agent's result
+        conversations[conversation_id]['chat_history'] = procurement_result['history']
         
-        # Add user message to messages
+        # Add user message and procurement agent response to messages list for frontend
         conversations[conversation_id]['messages'].append({
             'role': 'user',
             'content': message.message,
             'timestamp': datetime.now().isoformat()
         })
-        
-        # Add assistant response to messages
         conversations[conversation_id]['messages'].append({
             'role': 'assistant',
-            'content': result['message'],
+            'content': procurement_result['message'],
             'timestamp': datetime.now().isoformat()
         })
         
-        # Debug logging
-        print(f"Product extraction from agent: {agent.current_product}")
-        print(f"Chat history length after processing: {len(conversations[conversation_id]['chat_history'])}")
-        print(f"Response message: {result['message'][:50]}...")
+        # === Step 2: If specification finalized, call Shopping Agent ===
+        shopping_options = None
+        final_specification = procurement_result["specification"]
         
-        return {
+        if final_specification:
+            print(f"Procurement agent finalized specification. Calling Shopping Agent.")
+            try:
+                # Call the shopping agent asynchronously
+                shopping_options = await shopping_agent.find_options(final_specification)
+                print(f"Shopping agent returned {len(shopping_options) if shopping_options else 0} options.")
+            except Exception as shop_e:
+                print(f"Error calling Shopping Agent: {shop_e}")
+                # Optionally add an error message for the user
+                # procurement_result["message"] += "\n(Could not search for shopping options due to an error.)"
+
+        # === Step 3: Prepare response for frontend ===
+        print(f"Product extraction from agent: {procurement_agent_service.current_product}")
+        print(f"Chat history length after processing: {len(conversations[conversation_id]['chat_history'])}")
+        print(f"Response message: {procurement_result['message'][:50]}...")
+        
+        response_payload = {
             "conversation_id": conversation_id,
-            "response": result["message"],
-            "productSpecification": result["specification"],
-            "isSpecificationFinalized": bool(result["specification"]),
-            "messages": conversations[conversation_id]['messages']
+            "response": procurement_result["message"],
+            "productSpecification": final_specification,
+            "isSpecificationFinalized": bool(final_specification),
+            "messages": conversations[conversation_id]['messages'],
+            # Add shopping options if they exist
+            "shoppingOptions": shopping_options 
         }
+        
+        return response_payload
+        
     except Exception as e:
+        import traceback
         print(f"Error in chat endpoint: {str(e)}")
+        traceback.print_exc() # Print full traceback for debugging
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations/{conversation_id}")
@@ -147,9 +165,7 @@ async def get_conversation(conversation_id: str):
         "messages": conversations[conversation_id]['messages'],
     }
 
-@app.get("/api/check-api-key")
-async def check_api_key():
-    return {"has_valid_key": agent.has_valid_api_key()}
+# Removed check-api-key endpoint as it was not fully implemented
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000) 
