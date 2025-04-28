@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 # Import both agents
@@ -11,6 +11,12 @@ import nest_asyncio
 from typing import Optional, List, Dict, Any
 import uuid
 from datetime import datetime
+import httpx
+import os
+import json
+import hmac
+import hashlib
+import base64
 
 # Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
@@ -32,10 +38,161 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# WhatsApp configuration
+WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+WHATSAPP_API_VERSION = "v19.0"
+PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+
+# WhatsApp Models
+class WhatsAppChangeValue(BaseModel):
+    messaging_product: str
+    metadata: dict
+    contacts: Optional[List[dict]] = None
+    messages: Optional[List[dict]] = None
+    statuses: Optional[List[dict]] = None
+
+class WhatsAppChange(BaseModel):
+    value: WhatsAppChangeValue
+    field: str
+
+class WhatsAppEntry(BaseModel):
+    id: str
+    changes: List[WhatsAppChange]
+
+class WhatsAppWebhookPayload(BaseModel):
+    object: str
+    entry: List[WhatsAppEntry]
+
 class Message(BaseModel):
     message: str
     conversation_id: Optional[str] = None
     cached_messages: Optional[List[Dict[str, Any]]] = None
+
+# WhatsApp Webhook Verification
+@app.get("/webhook/whatsapp")
+async def verify_webhook(request: Request):
+    """Verifies webhook for WhatsApp API."""
+    print("Received verification request")
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+
+    if mode == "subscribe" and token == WHATSAPP_VERIFY_TOKEN:
+        print(f"Webhook verified successfully! Challenge: {challenge}")
+        return Response(content=challenge, status_code=200)
+    else:
+        print(f"Webhook verification failed. Mode: {mode}, Token: {token}")
+        raise HTTPException(status_code=403, detail="Verification token mismatch")
+
+# WhatsApp Webhook Handler
+@app.post("/webhook/whatsapp")
+async def handle_whatsapp_message(payload: WhatsAppWebhookPayload, background_tasks: BackgroundTasks):
+    """Handles incoming messages from WhatsApp."""
+    print("Received WhatsApp notification")
+    
+    try:
+        # Verify webhook signature (security)
+        # This is a placeholder - implement proper signature verification in production
+        # signature = request.headers.get("x-hub-signature-256")
+        # if not verify_signature(signature, await request.body()):
+        #     raise HTTPException(status_code=403, detail="Invalid signature")
+
+        for entry in payload.entry:
+            for change in entry.changes:
+                if change.field == "messages" and change.value.messages:
+                    for message_data in change.value.messages:
+                        if message_data.get("type") == "text" and not message_data.get("from_me"):
+                            sender_wa_id = message_data["from"]
+                            user_message = message_data["text"]["body"]
+                            print(f"Received message: '{user_message}' from {sender_wa_id}")
+
+                            background_tasks.add_task(
+                                process_incoming_whatsapp_message, 
+                                sender_wa_id, 
+                                user_message
+                            )
+
+    except Exception as e:
+        print(f"Error processing webhook payload: {e}")
+
+    return Response(content="EVENT_RECEIVED", status_code=200)
+
+# WhatsApp Message Sender
+async def send_whatsapp_message(recipient_wa_id: str, message_text: str):
+    """Sends a text message to a user via WhatsApp Cloud API."""
+    if not WHATSAPP_ACCESS_TOKEN or not PHONE_NUMBER_ID:
+        print("ERROR: WhatsApp credentials not configured.")
+        return
+
+    url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": recipient_wa_id,
+        "type": "text",
+        "text": {"body": message_text},
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            print(f"Successfully sent message to {recipient_wa_id}: {response.json()}")
+    except httpx.RequestError as e:
+        print(f"Error sending WhatsApp message (network): {e}")
+    except httpx.HTTPStatusError as e:
+        print(f"Error sending WhatsApp message (HTTP status): {e.response.status_code} - {e.response.text}")
+    except Exception as e:
+        print(f"Unexpected error sending WhatsApp message: {e}")
+
+# WhatsApp Message Processor
+async def process_incoming_whatsapp_message(sender_wa_id: str, user_message: str):
+    """Processes incoming WhatsApp message through AI agents and sends response."""
+    print(f"Processing message for {sender_wa_id}: '{user_message}'")
+
+    conversation_id = sender_wa_id
+
+    if conversation_id not in conversations:
+        conversations[conversation_id] = {
+            'messages': [],
+            'chat_history': [{'role': 'system', 'content': procurement_agent_service.agent.instructions}],
+            'created_at': datetime.now().isoformat()
+        }
+    current_chat_history = conversations[conversation_id]['chat_history']
+
+    try:
+        # Process with Procurement Agent
+        procurement_result = procurement_agent_service.process_message(
+            user_message,
+            current_chat_history
+        )
+        ai_response_text = procurement_result["message"]
+        final_specification = procurement_result["specification"]
+        conversations[conversation_id]['chat_history'] = procurement_result['history']
+
+        # If specification is finalized, call Shopping Agent
+        shopping_options_text = ""
+        if final_specification:
+            print(f"Specification finalized for {sender_wa_id}, calling Shopping Agent...")
+            shopping_options = await shopping_agent.find_options(final_specification)
+            if shopping_options:
+                shopping_options_text = "\n\nHere are some shopping options I found:"
+                for option in shopping_options[:3]:
+                    shopping_options_text += f"\n- {option['title']}: {option['link']}"
+
+        # Combine responses
+        full_response = ai_response_text + shopping_options_text
+
+        # Send response back via WhatsApp
+        await send_whatsapp_message(sender_wa_id, full_response)
+
+    except Exception as e:
+        print(f"Error processing AI response for {sender_wa_id}: {e}")
+        await send_whatsapp_message(sender_wa_id, "Sorry, I encountered an error processing your request.")
 
 @app.post("/api/chat")
 async def chat(message: Message):

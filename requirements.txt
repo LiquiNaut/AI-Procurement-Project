@@ -7,3 +7,5 @@ openai>=1.0.0
 nest-asyncio
 google-api-python-client
 httpx
+python-multipart
+cryptography
