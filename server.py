@@ -32,7 +32,10 @@ conversations = {}
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200"],  # Angular app URL
+    allow_origins=[
+        "http://localhost:4200",
+        "https://ai-procurement.netlify.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
